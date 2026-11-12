@@ -224,6 +224,9 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--amber);outline-
 .turnline .who{display:flex;align-items:center;gap:.45em}
 .turnline .tmn{color:var(--tc);font-family:var(--f-disp)}
 .turnline .crown{font-size:.9em}
+.cheatb{padding:.3em .9em;border-radius:999px;background:rgba(255,70,54,.15);border:2px solid var(--needle);color:#ffd3cc;font-weight:700;font-size:.85em}
+.cheatb:hover{background:var(--needle);color:#fff}
+.lock.cheat{--tc:var(--needle);padding:12px;font-size:1.05rem}
 .clue{display:flex;align-items:center;justify-content:center;gap:1.2vw;min-height:clamp(64px,11vh,150px);padding:1vh 2.4vw;border-radius:22px;
   background:linear-gradient(180deg,#071417,#0d2429);border:2px solid var(--cab4);box-shadow:inset 0 0 40px rgba(0,0,0,.6),0 0 0 6px rgba(255,255,255,.02);max-width:min(1200px,90vw)}
 .clue .k{color:var(--mut);font-size:clamp(.8rem,1.1vw,1.2rem);white-space:nowrap;display:flex;align-items:center;gap:.5em}
@@ -302,7 +305,7 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--amber);outline-
 .tprog i.on{background:var(--amber)}
 .wheelbox{position:relative;width:min(62vh,80vw);aspect-ratio:1}
 .wheelbox svg{width:100%;height:100%;display:block}
-.wheelbox .wh{transform-origin:50% 50%;transition:transform 6.2s cubic-bezier(.12,.75,.1,1)}
+.wheelbox .wh{position:absolute;inset:0;transform-origin:50% 50%;transition:transform 6.2s cubic-bezier(.12,.75,.1,1);will-change:transform}
 .wheelbox .ptr{position:absolute;left:50%;top:-3%;transform:translateX(-50%);width:0;height:0;border-left:22px solid transparent;border-right:22px solid transparent;border-top:42px solid var(--needle);filter:drop-shadow(0 0 10px var(--needle))}
 .wheelbox .hubw{position:absolute;inset:40%;border-radius:50%;background:var(--cab);border:6px solid var(--amber);display:grid;place-items:center;font-size:clamp(1.6rem,5vh,3rem)}
 .whv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4vw;align-items:center;width:min(1400px,100%)}
@@ -1287,7 +1290,7 @@ const MUSIC = (() => {
 const H = {
   r: null, code: '', ph: 'lobby', tg: 10, P: new Map(), sc: { r: 0, b: 0 },
   order: { r: [], b: [] }, li: { r: 0, b: 0 }, startTm: 'r', rnd: null, t: null, tn: 0,
-  hist: [], stats: {}, bombs: [], used: new Set(), usedP: new Set(),
+  hist: [], stats: {}, bombs: [], cheats: [], used: new Set(), usedP: new Set(),
   end: null, timers: [], tick: null, pq: false, pauseMsg: '', view: '', ui: {},
 };
 const GAME_PH = ['intro', 'clue', 'guess', 'reveal', 'pause', 'win'];
@@ -1318,14 +1321,14 @@ function saveHost() {
   store.set('mw_host', JSON.stringify({
     at: Date.now(), code: H.code, tg: H.tg, ph: H.ph, sc: H.sc,
     P: [...H.P.values()].map((p) => ({ pid: p.pid, name: p.name, av: p.av, tm: p.tm, ts: p.ts, bot: p.bot ? 1 : 0 })),
-    order: H.order, li: H.li, startTm: H.startTm, rnd: H.rnd, tn: H.tn, hist: H.hist, stats: H.stats, bombs: H.bombs,
+    order: H.order, li: H.li, startTm: H.startTm, rnd: H.rnd, tn: H.tn, hist: H.hist, stats: H.stats, bombs: H.bombs, cheats: H.cheats,
   }));
 }
 function restoreHost(s) {
   H.code = s.code; H.tg = s.tg || 10; H.sc = s.sc || { r: 0, b: 0 };
   for (const p of s.P || []) H.P.set(p.pid, { ...p, bot: !!p.bot, on: !!p.bot, peer: null, lastNd: null });
   H.order = s.order || { r: [], b: [] }; H.li = s.li || { r: 0, b: 0 }; H.startTm = s.startTm || 'r'; H.rnd = s.rnd || null; H.tn = s.tn || 0;
-  H.hist = s.hist || []; H.stats = s.stats || {}; H.bombs = s.bombs || [];
+  H.hist = s.hist || []; H.stats = s.stats || {}; H.bombs = s.bombs || []; H.cheats = s.cheats || [];
 }
 function loadUsed() {
   const u = store.json('mw_used') || {};
@@ -1370,7 +1373,7 @@ function buildSt() {
     if (t.cl) o.cl = t.cl;
     if (t.ty === 'sp' && H.ph === 'clue' && t.dl) o.rem = Math.max(0, t.dl - Date.now());
     if (H.ph !== 'reveal') o.sec = { g: t.g, b: t.b || null };
-    else o.rv = { st: t.rvs, g: t.g, b: t.b || null, p: t.res.pts, bh: t.res.bh ? 1 : 0, f: t.res.f ? 1 : 0 };
+    else o.rv = { st: t.rvs, g: t.g, b: t.b || null, p: t.res.pts, bh: t.res.bh ? 1 : 0, f: t.res.f ? 1 : 0, ch: t.res.ch ? 1 : 0 };
     st.t = o;
   }
   if (H.ph === 'pause') st.msg = H.pauseMsg;
@@ -1436,6 +1439,7 @@ function hostInput(P, pr) {
     }
     if (pr.lk === t.id) doReveal();
   }
+  if (t && pr.ch === t.id && P.tm !== t.tm && ['guess', 'reveal'].includes(H.ph)) cheat();
   if (H.ph === 'vote' && H.end && pr.vt && pr.vt.k === H.end.k && !H.end.votes[P.pid]) {
     const c = Number.isInteger(pr.vt.c) ? pr.vt.c : -1, p = typeof pr.vt.p === 'string' ? pr.vt.p : '';
     H.end.votes[P.pid] = { c, p };
@@ -1459,11 +1463,6 @@ function hostTick() {
     if (onlineIn(t.tm).filter((p) => p.pid !== t.ld).length === 0) { t.off = (t.off || 0) + 500; if (t.off >= 8000) { finishTurn(); return; } } else t.off = 0;
   }
   if (H.ph === 'pause' && !H.timers.length) { const tm = H.rnd && !roundOver() ? dueTeam() : null; if (tm ? onlineIn(tm).length >= 2 : onlineIn('r').length >= 2 && onlineIn('b').length >= 2) nextTurn(); }
-  if (H.ph === 'vote' && H.end) {
-    const online = [...H.P.values()].filter((p) => p.on);
-    if (now >= H.end.vdl || (online.length && online.every((p) => H.end.votes[p.pid]))) finishVote();
-    else { push(); updVote(); }
-  }
 }
 function pickLeader(tm) {
   const ord = H.order[tm];
@@ -1548,22 +1547,39 @@ function doReveal() {
   t.res = { pts: bh ? 0 : pts, bh }; t.rvs = 0;
   setPh('reveal'); SFX.drum(2.5);
   later(2650, () => {
-    if (H.t !== t) return;
+    if (H.t !== t || t.res.ch) return;
     t.rvs = 1; applyScore(t); push(); hostRender();
     if (bh) SFX.boom(); else if (t.res.pts) { SFX.crash(); SFX.score(t.res.pts); } else { SFX.crash(); SFX.womp(); }
   });
   later(2650 + 5800, afterReveal);
 }
 function applyScore(t) {
+  t.sc0 = H.sc[t.tm];
   if (t.res.bh) { H.sc[t.tm] = Math.max(0, H.sc[t.tm] - 2); H.bombs.push(t.mover || t.ld); }
   else H.sc[t.tm] += t.res.pts;
-  const st = H.stats[t.ld] || (H.stats[t.ld] = { pts: 0, fours: 0, turns: 0 });
-  st.turns++; st.pts += t.res.pts; if (t.res.pts === 4) st.fours++;
+  const st = H.stats[t.ld] || (H.stats[t.ld] = { pts: 0, fours: 0, turns: 0, zeros: 0 });
+  st.turns++; st.pts += t.res.pts; if (t.res.pts === 4) st.fours++; if (!t.res.pts && !t.res.bh) st.zeros = (st.zeros || 0) + 1;
   if (t.cl) H.hist.push({ ld: t.ld, tm: t.tm, cl: t.cl, p: t.res.pts });
   if (H.rnd) H.rnd.done[t.tm] = true;
   saveHost();
 }
 function afterReveal() { finishTurn(); }
+// 🚨 غشاش: التلميح فيه إشي ممنوع → نقاط هالدور بتنمسح
+function cheat() {
+  const t = H.t; if (!t || !t.cl || (t.res && (t.res.ch || t.res.f)) || !['guess', 'reveal'].includes(H.ph)) return;
+  if (H.ph === 'reveal' && t.rvs === 1 && t.sc0 != null) {
+    const st = H.stats[t.ld]; if (st) { st.pts -= t.res.pts; if (t.res.pts === 4) st.fours--; if (!t.res.pts && !t.res.bh) st.zeros--; }
+    if (t.res.bh) H.bombs.pop();
+    H.sc[t.tm] = t.sc0; H.hist.pop();
+  }
+  clearTimers();
+  t.res = { pts: 0, ch: 1 }; t.rvs = 1; H.cheats.push(t.ld);
+  if (H.rnd) H.rnd.done[t.tm] = true;
+  saveHost();
+  if (H.ph !== 'reveal') setPh('reveal'); else { push(); hostRender(); }
+  SFX.boom(); SFX.womp();
+  later(5200, afterReveal);
+}
 function skipTurn() {
   if (['intro', 'clue', 'guess'].includes(H.ph)) finishTurn();
   else if (H.ph === 'reveal' && H.t && (H.t.rvs === 1 || (H.t.res && H.t.res.f))) { clearTimers(); finishTurn(); }
@@ -1579,36 +1595,27 @@ function startWin(w) {
   clearTimers(); hideOverlay();
   H.end = { w, k: uid(6), votes: {} }; H.t = null;
   setPh('win'); SFX.fanfare(); confetti(5500);
-  later(7500, startVote);
-}
-function startVote() {
-  const e = H.end;
-  e.vo = H.hist.map((x, i) => [i, x.cl, x.ld]).slice(-14);
-  e.vdl = Date.now() + 45000; e.votes = {};
-  setPh('vote'); botVotes();
+  later(7000, makeTitles);
 }
 function topBy(counts) {
   let best = [], max = 0;
   for (const [k, n] of Object.entries(counts)) { if (n > max) { max = n; best = [k]; } else if (n === max) best.push(k); }
   return max ? { k: pick(best), n: max } : null;
 }
-function finishVote() {
-  const e = H.end; if (H.ph !== 'vote') return;
-  const T = [];
-  const L = Object.entries(H.stats).filter(([, s]) => s.pts > 0).sort((a, b) => b[1].pts - a[1].pts || b[1].fours - a[1].fours)[0];
+function makeTitles() {
+  const e = H.end; if (!e || H.ph !== 'win') return;
+  const T = [], S = Object.entries(H.stats);
+  const L = S.filter(([, s]) => s.pts > 0).sort((a, b) => b[1].pts - a[1].pts || b[1].fours - a[1].fours)[0];
   if (L) T.push({ ic: '🎯', n: 'أفضل قائد', who: L[0], why: 'تلميحاته جابت لفريقه ' + ptsTxt(L[1].pts) });
-  const cc = {}, pc = {};
-  for (const [voter, v] of Object.entries(e.votes)) {
-    const hc = H.hist[v.c]; if (hc && hc.ld !== voter) cc[v.c] = (cc[v.c] || 0) + 1;
-    if (v.p && v.p !== voter && H.P.has(v.p)) pc[v.p] = (pc[v.p] || 0) + 1;
-  }
-  const bc = topBy(cc);
-  if (bc) { const x = H.hist[+bc.k]; T.push({ ic: '😂', n: 'أحلى تلميح الليلة', who: x.ld, q: x.cl, why: votesTxt(bc.n) }); }
-  const bp = topBy(pc);
-  if (bp) T.push({ ic: '🗣️', n: 'ملك النقاش', who: bp.k, why: votesTxt(bp.n) });
+  const Z = S.filter(([pid, s]) => s.zeros > 0 && (!L || pid !== L[0])).sort((a, b) => b[1].zeros - a[1].zeros)[0];
+  if (Z) T.push({ ic: '🌀', n: 'تايه عالموجة', who: Z[0], why: Z[1].zeros > 1 ? Z[1].zeros + ' تلميحات ما جابت ولا نقطة 😅' : 'تلميح ما جاب ولا نقطة 😅' });
   if (H.bombs.length) {
     const bb = {}; for (const pid of H.bombs) bb[pid] = (bb[pid] || 0) + 1;
-    const b = topBy(bb); T.push({ ic: '💣', n: 'صديق القنبلة', who: b.k, why: b.n > 1 ? 'آخر إيد حرّكت المؤشر عالقنبلة… ' + b.n + ' مرات 💥' : 'آخر إيد حرّكت المؤشر قبل ما ينفجر 💥' });
+    const x = topBy(bb); T.push({ ic: '💣', n: 'صديق القنبلة', who: x.k, why: x.n > 1 ? 'آخر إيد حرّكت المؤشر عالقنبلة… ' + x.n + ' مرات 💥' : 'آخر إيد حرّكت المؤشر قبل ما ينفجر 💥' });
+  }
+  if (H.cheats.length) {
+    const cc = {}; for (const pid of H.cheats) cc[pid] = (cc[pid] || 0) + 1;
+    const x = topBy(cc); T.push({ ic: '🚨', n: 'غشاش السهرة', who: x.k, why: x.n > 1 ? 'انمسك تلميحه ' + x.n + ' مرات 🙈' : 'انمسك تلميحه 🙈' });
   }
   e.T = T; e.ti = 0; e.tst = 0;
   if (!T.length) { startWheel(); return; }
@@ -1636,7 +1643,8 @@ function spinWheel() {
   if (wh) {
     const seg = 360 / PUNISH.length, base = 360 * 6;
     const target = base + (360 - (i * seg + seg / 2)) + rnd(-seg * 0.3, seg * 0.3);
-    requestAnimationFrame(() => { wh.style.transform = `rotate(${target}deg)`; });
+    wh.style.transform = 'rotate(0deg)'; void wh.offsetWidth;
+    setTimeout(() => { wh.style.transform = `rotate(${target}deg)`; }, 30);
   }
   let t = 0, gap = 45; const tickLoop = () => { if (t > 6000) return; SFX.click(); t += gap; gap *= 1.07; setTimeout(tickLoop, gap); }; tickLoop();
   later(6400, () => { e.pun = i; SFX.ding(); confetti(2500); push(); hostRender(); MUSIC.duck(false); });
@@ -1644,7 +1652,7 @@ function spinWheel() {
 }
 function newRound(toLobby) {
   clearTimers(); hideOverlay();
-  H.sc = { r: 0, b: 0 }; H.hist = []; H.stats = {}; H.bombs = []; H.end = null; H.t = null; H.rnd = null;
+  H.sc = { r: 0, b: 0 }; H.hist = []; H.stats = {}; H.bombs = []; H.cheats = []; H.end = null; H.t = null; H.rnd = null;
   if (toLobby) { setPh('lobby'); return; }
   startGame(true);
 }
@@ -1655,7 +1663,7 @@ function startGame(keep) {
   for (const [k, p] of H.P) if (!p.on) H.P.delete(k);
   H.order = { r: shuffle(r.map((p) => p.pid)), b: shuffle(b.map((p) => p.pid)) };
   H.li = { r: 0, b: 0 }; H.startTm = Math.random() < 0.5 ? 'r' : 'b'; H.rnd = null;
-  H.sc = { r: 0, b: 0 }; H.hist = []; H.stats = {}; H.bombs = []; H.end = null;
+  H.sc = { r: 0, b: 0 }; H.hist = []; H.stats = {}; H.bombs = []; H.cheats = []; H.end = null;
   nextTurn();
 }
 function shuffleTeams() {
@@ -1821,6 +1829,8 @@ function updStage() {
     if (t.ty === 'sq') setPuck(u.svg, u.cur); else setNeedle(u.svg, u.cur);
     u.dialbox = h('div', { class: 'dialbox' + (t.ty === 'sq' ? ' sq' : '') }, blk.wrap);
     u.res = h('div', { class: 'res ' + tcls(t.tm) });
+    u.cheatb = h('button', { class: 'cheatb', type: 'button', hidden: true, onclick: cheat }, '🚨 غشاش');
+    u.turnline.append(u.cheatb);
     u.dialbox.append(u.res); u.sq = t.ty === 'sq';
     u.stage.replaceChildren(u.turnline, u.clue, u.dialbox);
     requestAnimationFrame(fitDial);
@@ -1849,9 +1859,10 @@ function updStage() {
     }
     if (ph === 'guess') u.status.textContent = 'فريق ' + TEAMS[t.tm].name + ' عم يتناقش ويحرّك المؤشر… القائد ممنوع يحكي 🤐';
   }
+  if (u.cheatb) u.cheatb.hidden = !(t.cl && (ph === 'guess' || ph === 'reveal') && !(t.res && (t.res.ch || t.res.f)));
   if (ph === 'reveal' && t.res) {
-    if (t.res.f) {
-      if (u.rvShown !== 2) { u.rvShown = 2; if (u.cdEl) { u.cdEl.remove(); u.cdEl = null; } u.ctx.className = 'tx wait'; u.ctx.textContent = 'ما وصل تلميح'; showReveal(t, true); showResult(t); }
+    if (t.res.f || t.res.ch) {
+      if (u.rvShown !== 2) { u.rvShown = 2; if (u.cdEl) { u.cdEl.remove(); u.cdEl = null; } if (t.res.f) { u.ctx.className = 'tx wait'; u.ctx.textContent = 'ما وصل تلميح'; } else { u.ctx.className = 'tx'; u.ctx.textContent = t.cl; u.ctx.style.textDecoration = 'line-through'; u.ctx.style.opacity = '.6'; } showReveal(t, true); showResult(t); }
     } else if (t.rvs === 0 && u.rvShown < 0) { u.rvShown = 0; showReveal(t); u.dialbox.classList.add('rolling'); u.status.textContent = ''; }
     else if (t.rvs === 1 && u.rvShown < 1) { if (u.rvShown < 0) showReveal(t, true); u.rvShown = 1; showResult(t); }
   }
@@ -1865,7 +1876,8 @@ function showResult(t) {
   const u = H.ui, r = t.res;
   u.dialbox.classList.remove('rolling');
   let big, sub;
-  if (r.f) { big = '0'; sub = '⏰ خلص الوقت'; }
+  if (r.ch) { big = '🚨'; sub = 'غشاش! النقاط انمسحت'; u.stage.classList.remove('shake'); void u.stage.offsetWidth; u.stage.classList.add('shake'); }
+  else if (r.f) { big = '0'; sub = '⏰ خلص الوقت'; }
   else if (r.bh) { big = '−2'; sub = '💥 وقعتوا عالقنبلة!'; u.stage.classList.remove('shake'); void u.stage.offsetWidth; u.stage.classList.add('shake'); }
   else { big = r.pts ? '+' + r.pts : '0'; sub = RES[r.pts].t; if (r.pts === 4) confetti(2600); }
   u.res.className = 'res ' + tcls(t.tm) + (r.bh ? ' boom' : '');
@@ -1942,7 +1954,7 @@ function showWinOverlay() {
       h('div', { class: 'fs red' }, h('div', { class: 'n' }, '🔴 الأحمر'), h('div', { class: 's' }, String(H.sc.r))),
       h('div', { class: 'vs' }, '—'),
       h('div', { class: 'fs blue' }, h('div', { class: 'n' }, '🔵 الأزرق'), h('div', { class: 's' }, String(H.sc.b)))),
-    h('div', { class: 'rl' }, 'هلأ وقت الألقاب… شوفوا جوالاتكم 📱')));
+    h('div', { class: 'rl' }, 'وهلأ… الألقاب 🏆')));
 }
 
 function renderVote() {
@@ -1993,7 +2005,7 @@ function wheelSvg() {
     const ic = Array.from(PUNISH[i]).slice(-2).join('').trim();
     s += `<text x="${tx.toFixed(2)}" y="${ty.toFixed(2)}" font-size="7" text-anchor="middle" dominant-baseline="middle">${ic}</text>`;
   }
-  return `<svg viewBox="0 0 100 100"><g class="wh">${s}</g></svg>`;
+  return `<svg viewBox="0 0 100 100"><g>${s}</g></svg>`;
 }
 function renderWheel() {
   mount('wheel', () => {
@@ -2003,7 +2015,7 @@ function renderWheel() {
     return h('div', { class: 'endv' },
       h('h2', null, 'عجلة العقوبات 🎡'),
       h('div', { class: 'sub' }, 'العقوبة على ' + TEAMS[L].dot + ' فريق ' + TEAMS[L].name + '… حدا منهم يلفّها من جواله'),
-      h('div', { class: 'whv' }, h('div', { class: 'wheelbox' }, h('div', { html: wheelSvg() }), h('div', { class: 'ptr' }), h('div', { class: 'hubw' }, '😈')), u.side));
+      h('div', { class: 'whv' }, h('div', { class: 'wheelbox' }, h('div', { class: 'wh', html: wheelSvg() }), h('div', { class: 'ptr' }), h('div', { class: 'hubw' }, '😈')), u.side));
   });
   const u = H.ui, e = H.end;
   const k = (e.spin ? 1 : 0) + ':' + (e.pun != null ? e.pun : '');
@@ -2252,7 +2264,7 @@ function renderPhone() {
     const role = t ? (t.ld === M.pid ? 'lead' : me && me[3] === t.tm ? 'guess' : 'watch') : '';
     view = st.ph;
     const e = st.e || {};
-    key = [st.ph, t ? t.id : '', role, t && t.rv ? t.rv.st : '', e.k || '', e.ti != null ? e.ti + '.' + e.tst : '', e.spin != null ? (e.spin >= 0 ? 1 : 0) + '.' + (e.done || 0) : '', me ? 1 : 0, M.tm].join('|');
+    key = [st.ph, t ? t.id : '', role, t && t.rv ? t.rv.st + '.' + (t.rv.ch || 0) : '', e.k || '', e.ti != null ? e.ti + '.' + e.tst : '', e.spin != null ? (e.spin >= 0 ? 1 : 0) + '.' + (e.done || 0) : '', me ? 1 : 0, M.tm].join('|');
     if (st.ph === 'vote') key += '|' + (M.vote && M.vote.k === e.k ? M.vote.step : 0) + ((e.vd || []).includes(M.pid) ? 'v' : '');
     if (st.ph === 'lobby') key += '|' + (me ? me[3] : '');
   }
@@ -2375,12 +2387,17 @@ function buildPhone(view) {
         main = [...clue, h('div', { class: 'pdial' }, blk.wrap)];
         cue = '🤐 ممنوع تحكي'; cls = 'hot';
       } else {
-        main = [...clue, h('div', { class: 'pdial' }, blk.wrap)];
+        main = [...clue, h('div', { class: 'pdial' }, blk.wrap), cheatBtn(t.id)];
         cue = 'دور ' + TEAMS[t.tm].dot + ' ' + TEAMS[t.tm].name + ' 👀';
       }
     } else {
       const rv = t.rv;
-      if (rv.f) {
+      if (rv.ch) {
+        setShutter(u.svg, true, true);
+        main = [card(h('div', { class: 'big-ic' }, '🚨'), h('h2', null, 'غشاش!'), h('p', null, 'نقاط هالدور انمسحت')), h('div', { class: 'pdial' }, blk.wrap)];
+        cue = 'الدور الجاي…';
+        const bk = t.id + 'ch'; if (M.buzzed !== bk) { M.buzzed = bk; buzz([300, 80, 300]); }
+      } else if (rv.f) {
         setShutter(u.svg, true, true);
         main = [card(h('div', { class: 'big-ic' }, '⏰'), h('h2', null, 'خلص الوقت!')), h('div', { class: 'pdial' }, blk.wrap)];
         cue = 'الدور الجاي…';
@@ -2392,7 +2409,7 @@ function buildPhone(view) {
         setShutter(u.svg, true, true);
         const mine = t.tm === M.tm, big = rv.bh ? '−2' : rv.p ? '+' + rv.p : '0';
         const txt = rv.bh ? '💥 قنبلة!' : RES[rv.p].t;
-        main = [h('div', { class: 'pres ' + tcls(t.tm) }, h('div', { class: 'n' }, big), h('div', { class: 't' }, mine ? txt : TEAMS[t.tm].dot + ' ' + TEAMS[t.tm].name + ': ' + txt)), h('div', { class: 'pdial' }, blk.wrap)];
+        main = [h('div', { class: 'pres ' + tcls(t.tm) }, h('div', { class: 'n' }, big), h('div', { class: 't' }, mine ? txt : TEAMS[t.tm].dot + ' ' + TEAMS[t.tm].name + ': ' + txt)), h('div', { class: 'pdial' }, blk.wrap), mine ? null : cheatBtn(t.id)];
         cue = 'الدور الجاي…';
         cls = mine && rv.p ? 'go' : 'wait';
         const bk = t.id + 'rv';
@@ -2515,6 +2532,17 @@ function bindDrag(svg, sq) {
   svg.addEventListener('pointermove', (e) => { if (M.drag) send(val(e)); });
   const up = () => { if (M.drag) { M.drag = false; M.dragAt = Date.now(); } };
   svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up); svg.addEventListener('lostpointercapture', up);
+}
+function cheatBtn(tid) {
+  const b = h('button', { class: 'lock cheat', type: 'button' }, h('i', { class: 'fill' }), h('span', null, '🚨 التلميح ممنوع؟ اضغط مطوّل'));
+  let tmr = null, done = false;
+  const fire = () => { if (done) return; done = true; setP({ ch: tid }); buzz(80); b.disabled = true; $('span', b).textContent = '🚨 انبعث'; };
+  const start = (e) => { e.preventDefault(); if (done) return; b.classList.add('hold'); clearTimeout(tmr); tmr = setTimeout(() => { b.classList.remove('hold'); fire(); }, 750); };
+  const stop = () => { clearTimeout(tmr); b.classList.remove('hold'); };
+  b.addEventListener('pointerdown', start); b.addEventListener('pointerup', stop); b.addEventListener('pointerleave', stop); b.addEventListener('pointercancel', stop);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+  b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fire(); } });
+  return b;
 }
 function lockBtn(tid) {
   const b = h('button', { class: 'lock', type: 'button' }, h('i', { class: 'fill' }), h('span', null, '✋ اضغط مطوّل للتثبيت'));
