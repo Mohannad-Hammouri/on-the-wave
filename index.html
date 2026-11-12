@@ -396,86 +396,92 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--amber);outline-
 <body>
 <div id="app" dir="rtl" lang="ar"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <script>
 "use strict";
 window.APP_URL = location.href.split("#")[0];
-/* ================= نسخة GitHub: اتصال بين الأجهزة عن طريق PeerJS (بدل غرفة Claude) ================= */
+/* ================= نسخة GitHub: الاتصال عن طريق سيرفر وسيط (MQTT) بدل الاتصال المباشر =================
+   كل جهاز بيتصل بالإنترنت عادي، فبيشتغل على أي شبكة (واي فاي أو نت موبايل). */
 (function () {
   if (window.claude && window.claude.use) return;
-  const PREFIX = 'alamawja-v1-';
-  const OPTS = Object.assign({ config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }] } }, window.PEER_TEST || {});
+  const BROKERS = window.RELAY_TEST || ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+  const BASE = 'alamawja/v2/';
+  const BEAT = 1500, DEAD = 7000;
 
   function makeRoom(name) {
     const code = String(name).replace(/^mw-/, '');
-    let me = {}, mode = null, peer = null, closed = false, connected = false;
+    const T = BASE + code + '/';
+    const cid = 'mw' + Math.random().toString(36).slice(2, 12);
+    let me = {}, mode = null, closed = false, connected = false, sendT = null, beat = null;
     let handlers = [], connHs = [];
-    const conns = new Map();          // host: phone connections
-    let hostConn = null, hostSt = null, hostAt = 0, retry = null; // phone side
-    let sendT = null;
+    const peers = new Map();   // host: phones by id
+    let hostSt = null, hostSeen = 0, hostAt = 0;
+    const clients = [];
 
     const fire = () => {
-      const peers = mode === 'host'
-        ? [...conns.values()].filter((c) => c.pres).map((c) => ({ peer: c.id, presence: c.pres, updatedAt: c.at, isMe: false }))
+      const list = mode === 'host'
+        ? [...peers.values()].map((p) => ({ peer: p.id, presence: p.pres, updatedAt: p.at, isMe: false }))
         : hostSt ? [{ peer: 'host', presence: hostSt, updatedAt: hostAt, isMe: false }] : [];
-      for (const h of handlers) { try { h({ peers, joined: [], left: [], updated: [] }); } catch (e) { console.error(e); } }
+      for (const h of handlers) { try { h({ peers: list, joined: [], left: [], updated: [] }); } catch (e) { console.error(e); } }
     };
-    const setConn = (c) => { if (connected === c) return; connected = c; for (const f of connHs) { try { f(c); } catch (e) { /* */ } } };
+    const setConn = () => {
+      const c = clients.some((x) => x.connected);
+      if (c === connected) return; connected = c;
+      for (const f of connHs) { try { f(c); } catch (e) { /* */ } }
+    };
+    const pub = (topic, obj) => { const s = JSON.stringify(obj); for (const c of clients) if (c.connected) { try { c.publish(topic, s, { qos: 0 }); } catch (e) { /* */ } } };
     const send = () => {
-      sendT = null;
-      if (mode === 'host') { for (const r of conns.values()) if (r.c.open) { try { r.c.send({ t: 'hs', p: me }); } catch (e) { /* */ } } }
-      else if (hostConn && hostConn.open) { try { hostConn.send({ t: 'p', p: me }); } catch (e) { /* */ } }
+      sendT = null; if (closed || !mode) return;
+      if (mode === 'host') pub(T + 'h', { p: me, t: Date.now() });
+      else pub(T + 'p/' + cid, { p: me });
     };
-    const queue = () => { if (!sendT) sendT = setTimeout(send, 33); };
+    const queue = () => { if (!sendT) sendT = setTimeout(send, 40); };
 
-    function startHost(attempt) {
-      if (closed) return;
-      peer = new Peer(PREFIX + code, OPTS);
-      peer.on('open', () => setConn(true));
-      peer.on('connection', (c) => {
-        const rec = { id: c.peer, c, pres: null, at: Date.now() };
-        const old = conns.get(c.peer); if (old) { try { old.c.close(); } catch (e) { /* */ } }
-        conns.set(c.peer, rec);
-        c.on('open', () => { try { c.send({ t: 'hs', p: me }); } catch (e) { /* */ } });
-        c.on('data', (d) => { if (d && d.t === 'p' && d.p && typeof d.p === 'object') { rec.pres = d.p; rec.at = Date.now(); fire(); } });
-        const gone = () => { if (conns.get(c.peer) === rec) { conns.delete(c.peer); fire(); } };
-        c.on('close', gone); c.on('error', gone);
-      });
-      peer.on('error', (err) => {
-        if (err.type === 'unavailable-id' && attempt < 8) { try { peer.destroy(); } catch (e) { /* */ } setTimeout(() => startHost(attempt + 1), 1500); }
-        else if (['network', 'server-error', 'socket-error', 'socket-closed', 'disconnected'].includes(err.type)) setConn(false);
-      });
-      peer.on('disconnected', () => { setConn(false); setTimeout(() => { try { if (!closed && !peer.destroyed) peer.reconnect(); } catch (e) { /* */ } }, 1500); });
+    function onMsg(topic, buf) {
+      let d; try { d = JSON.parse(buf.toString()); } catch (e) { return; }
+      if (!d || typeof d !== 'object') return;
+      if (mode === 'host' && topic.startsWith(T + 'p/')) {
+        const id = topic.slice((T + 'p/').length);
+        if (d.bye) { if (peers.delete(id)) fire(); return; }
+        if (!d.p || typeof d.p !== 'object') return;
+        const old = peers.get(id), js = JSON.stringify(d.p);
+        if (old) { old.seen = Date.now(); if (old.js === js) return; old.js = js; old.pres = d.p; old.at = Date.now(); }
+        else peers.set(id, { id, pres: d.p, js, at: Date.now(), seen: Date.now() });
+        fire();
+      } else if (mode === 'player' && topic === T + 'h') {
+        if (!d.p || typeof d.p !== 'object') return;
+        hostSeen = Date.now();
+        const js = JSON.stringify(d.p);
+        if (hostSt && JSON.stringify(hostSt) === js) return;
+        hostSt = d.p; hostAt = Date.now(); fire();
+      }
     }
-    function startPlayer() {
-      if (closed) return;
-      peer = new Peer(OPTS);
-      peer.on('open', connect);
-      peer.on('error', (err) => {
-        if (err.type === 'peer-unavailable') { hostSt = null; fire(); later(); }
-        else if (['network', 'server-error', 'socket-error', 'socket-closed', 'disconnected'].includes(err.type)) { setConn(false); later(); }
-      });
-      peer.on('disconnected', () => { setConn(false); setTimeout(() => { try { if (!closed && !peer.destroyed) peer.reconnect(); } catch (e) { /* */ } }, 1500); });
-    }
-    function later() { clearTimeout(retry); if (!closed) retry = setTimeout(connect, 2000); }
-    function connect() {
-      if (closed || !peer || peer.destroyed || peer.disconnected) { later(); return; }
-      if (hostConn && hostConn.open) return;
-      let c; try { c = peer.connect(PREFIX + code, { reliable: true, serialization: 'json' }); } catch (e) { later(); return; }
-      if (!c) { later(); return; }
-      hostConn = c;
-      const opener = setTimeout(() => { if (hostConn === c && !c.open) { try { c.close(); } catch (e) { /* */ } hostConn = null; later(); } }, 9000);
-      c.on('open', () => { clearTimeout(opener); setConn(true); try { c.send({ t: 'p', p: me }); } catch (e) { /* */ } });
-      c.on('data', (d) => { if (d && d.t === 'hs' && d.p) { hostSt = d.p; hostAt = Date.now(); fire(); } });
-      const lost = () => { clearTimeout(opener); if (hostConn !== c) return; hostConn = null; hostSt = null; setConn(false); fire(); later(); };
-      c.on('close', lost); c.on('error', lost);
+    function start() {
+      for (const url of BROKERS) {
+        let c;
+        try { c = mqtt.connect(url, { clientId: cid + clients.length, clean: true, keepalive: 20, reconnectPeriod: 2000, connectTimeout: 8000 }); }
+        catch (e) { continue; }
+        c.on('connect', () => {
+          c.subscribe(mode === 'host' ? T + 'p/+' : T + 'h', { qos: 0 });
+          setConn(); send();
+        });
+        c.on('message', onMsg);
+        c.on('close', setConn); c.on('offline', setConn); c.on('error', () => {});
+        clients.push(c);
+      }
+      beat = setInterval(() => {
+        send();
+        const now = Date.now();
+        if (mode === 'host') { let ch = false; for (const [k, p] of peers) if (now - p.seen > DEAD) { peers.delete(k); ch = true; } if (ch) fire(); }
+        else if (hostSt && now - hostSeen > DEAD) { hostSt = null; fire(); }
+      }, BEAT);
+      addEventListener('pagehide', () => { if (mode === 'player') pub(T + 'p/' + cid, { bye: 1 }); });
     }
 
     return {
       presence(patch) {
         for (const k in patch) { if (patch[k] === null) delete me[k]; else me[k] = patch[k]; }
-        if (!mode && me.role === 'host') { mode = 'host'; startHost(0); }
-        else if (!mode && me.role === 'player') { mode = 'player'; startPlayer(); }
+        if (!mode && (me.role === 'host' || me.role === 'player')) { mode = me.role; start(); }
         queue(); return Promise.resolve();
       },
       onPeers(h) { handlers.push(h); setTimeout(fire, 0); return () => { handlers = handlers.filter((x) => x !== h); }; },
@@ -484,12 +490,17 @@ window.APP_URL = location.href.split("#")[0];
       connected() { return connected; },
       emit() { return Promise.resolve(); },
       on() { return () => {}; },
-      leave() { closed = true; clearTimeout(retry); delete rooms[name]; try { if (peer) peer.destroy(); } catch (e) { /* */ } return Promise.resolve(); },
+      leave() {
+        if (mode === 'player') pub(T + 'p/' + cid, { bye: 1 });
+        closed = true; clearInterval(beat); delete rooms[name];
+        setTimeout(() => { for (const c of clients) { try { c.end(true); } catch (e) { /* */ } } }, 200);
+        return Promise.resolve();
+      },
     };
   }
   const rooms = {};
   const lobby = { join: async (name) => rooms[name] || (rooms[name] = makeRoom(name)) };
-  window.claude = { use: async (n) => (n === 'room' && window.Peer ? lobby : null) };
+  window.claude = { use: async (n) => (n === 'room' && window.mqtt ? lobby : null) };
 })();
 
 /* ================= المحتوى ================= */
